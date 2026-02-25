@@ -2,7 +2,7 @@ use std::cell::RefCell;
 use std::rc::Rc;
 
 use gtk4::prelude::*;
-use gtk4::{Application, ApplicationWindow, Box as GtkBox, Button, Label, Orientation};
+use gtk4::{Application, ApplicationWindow, Box as GtkBox, Button, DropDown, Label, Orientation};
 
 use crate::indicator;
 use crate::recorder::{Recorder, Region};
@@ -12,6 +12,7 @@ use crate::region_selector;
 struct AppState {
     recorder: Recorder,
     indicator_window: Option<gtk4::Window>,
+    fps: u32,
 }
 
 /// Build and show the main application window.
@@ -20,6 +21,7 @@ pub fn build_ui(app: &Application) {
     let state = Rc::new(RefCell::new(AppState {
         recorder: Recorder::new(),
         indicator_window: None,
+        fps: 15,
     }));
 
     // ── Main window ───────────────────────────────────────────────────────
@@ -27,7 +29,7 @@ pub fn build_ui(app: &Application) {
         .application(app)
         .title("GIF That For You")
         .default_width(360)
-        .default_height(200)
+        .default_height(240)
         .resizable(false)
         .build();
 
@@ -47,7 +49,17 @@ pub fn build_ui(app: &Application) {
     let full_btn = Button::with_label("Record Entire Screen");
     full_btn.add_css_class("suggested-action");
 
+    let window_btn = Button::with_label("Record Window…");
+
     let region_btn = Button::with_label("Select Region…");
+
+    // ── FPS dropdown ──────────────────────────────────────────────────────
+    let fps_row = GtkBox::new(Orientation::Horizontal, 8);
+    let fps_label = Label::new(Some("Frame rate:"));
+    let fps_dropdown = DropDown::from_strings(&["5 fps", "10 fps", "15 fps", "20 fps", "24 fps", "30 fps"]);
+    fps_dropdown.set_selected(2); // default: 15 fps
+    fps_row.append(&fps_label);
+    fps_row.append(&fps_dropdown);
 
     let status_label = Label::new(Some(""));
     status_label.set_wrap(true);
@@ -56,10 +68,23 @@ pub fn build_ui(app: &Application) {
     vbox.append(&title_label);
     vbox.append(&hint_label);
     vbox.append(&full_btn);
+    vbox.append(&window_btn);
     vbox.append(&region_btn);
+    vbox.append(&fps_row);
     vbox.append(&status_label);
 
     window.set_child(Some(&vbox));
+
+    // ── FPS dropdown → update AppState.fps ────────────────────────────────
+    {
+        const FPS_VALUES: [u32; 6] = [5, 10, 15, 20, 24, 30];
+        let state = state.clone();
+        fps_dropdown.connect_selected_notify(move |dd| {
+            let idx = dd.selected() as usize;
+            let fps = FPS_VALUES.get(idx).copied().unwrap_or(15);
+            state.borrow_mut().fps = fps;
+        });
+    }
 
     // ── "Record Entire Screen" button ─────────────────────────────────────
     {
@@ -69,7 +94,19 @@ pub fn build_ui(app: &Application) {
         let status = status_label.clone();
         full_btn.connect_clicked(move |_| {
             status.set_text("Waiting for screen selection…");
-            start_recording(&app_clone, &window_clone, &state, None, &status);
+            start_recording(&app_clone, &window_clone, &state, 1, None, &status);
+        });
+    }
+
+    // ── "Record Window" button ────────────────────────────────────────────
+    {
+        let state = state.clone();
+        let app_clone = app.clone();
+        let window_clone = window.clone();
+        let status = status_label.clone();
+        window_btn.connect_clicked(move |_| {
+            status.set_text("Waiting for window selection…");
+            start_recording(&app_clone, &window_clone, &state, 2, None, &status);
         });
     }
 
@@ -89,7 +126,7 @@ pub fn build_ui(app: &Application) {
             region_selector::show_region_selector(&app_clone, move |region| {
                 status2.set_text("Waiting for screen selection…");
                 win2.present();
-                start_recording(&app2, &win2, &state2, Some(region), &status2);
+                start_recording(&app2, &win2, &state2, 1, Some(region), &status2);
             });
         });
     }
@@ -118,6 +155,7 @@ fn start_recording(
     app: &Application,
     window: &ApplicationWindow,
     state: &Rc<RefCell<AppState>>,
+    source_types: u32,
     crop: Option<Region>,
     status: &Label,
 ) {
@@ -128,7 +166,7 @@ fn start_recording(
     let window_clone = window.clone();
     let status_clone = status.clone();
 
-    recorder.start_portal(crop, move |result| {
+    recorder.start_portal(source_types, crop, move |result| {
         match result {
             Ok(()) => {
                 // Hide the main window while recording.
@@ -164,7 +202,8 @@ fn do_stop_recording(
     }
 
     let recorder = state.borrow().recorder.clone();
-    match recorder.stop() {
+    let fps = state.borrow().fps;
+    match recorder.stop(fps) {
         Ok(path) => {
             status.set_text(&format!("Saved: {}", path.to_string_lossy()));
         }

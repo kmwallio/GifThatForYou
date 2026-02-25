@@ -25,6 +25,8 @@ struct PortalState {
     connection: gio::DBusConnection,
     session_handle: Option<String>,
     counter: u32,
+    /// Source types bitmask: 1=MONITOR, 2=WINDOW, 3=BOTH
+    source_types: u32,
 }
 
 /// Begin the XDG ScreenCast portal flow.
@@ -35,7 +37,7 @@ struct PortalState {
 ///
 /// All D-Bus calls are asynchronous and integrated with the GLib main loop so
 /// the UI stays responsive.
-pub fn request_screencast<F>(on_ready: F)
+pub fn request_screencast<F>(source_types: u32, on_ready: F)
 where
     F: Fn(Result<PortalStream, String>) + 'static,
 {
@@ -51,6 +53,7 @@ where
         connection: connection.clone(),
         session_handle: None,
         counter: 0,
+        source_types,
     }));
 
     let on_ready = Rc::new(on_ready);
@@ -136,7 +139,7 @@ fn step_select_sources(
     let options = glib::VariantDict::new(None);
     options.insert("handle_token", &token);
     // types: 1 = MONITOR, 2 = WINDOW, 3 = BOTH
-    options.insert("types", 3u32);
+    options.insert("types", state.borrow().source_types);
     // cursor_mode: 2 = EMBEDDED (draw cursor into the stream)
     options.insert("cursor_mode", 2u32);
 

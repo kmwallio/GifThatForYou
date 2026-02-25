@@ -19,6 +19,9 @@ struct RecorderState {
     process: Option<Child>,
     raw_file: Option<PathBuf>,
     crop: Option<Region>,
+    /// 1 = MONITOR, 2 = WINDOW, 3 = BOTH — stored so stop() knows whether to
+    /// auto-crop black borders after a window capture.
+    source_types: u32,
     /// Keep the PipeWire fd alive for the duration of the recording.
     _pipewire_fd: Option<std::os::fd::OwnedFd>,
 }
@@ -41,6 +44,7 @@ impl Recorder {
                 process: None,
                 raw_file: None,
                 crop: None,
+                source_types: 3,
                 _pipewire_fd: None,
             })),
         }
@@ -53,21 +57,18 @@ impl Recorder {
 
     /// Asynchronously start recording via the XDG ScreenCast portal.
     ///
-    /// The portal will present a system dialog for the user to select a screen
-    /// or window.  After the user confirms, a GStreamer pipeline is spawned to
-    /// record from the resulting PipeWire stream.
-    ///
+    /// `source_types`: 1=MONITOR, 2=WINDOW, 3=BOTH.
     /// `crop` optionally defines a region to crop during GIF conversion.
     /// `on_result` is called on the main thread when recording starts or fails.
-    pub fn start_portal<F>(&self, crop: Option<Region>, on_result: F)
+    pub fn start_portal<F>(&self, source_types: u32, crop: Option<Region>, on_result: F)
     where
         F: Fn(Result<(), String>) + 'static,
     {
         let state = self.state.clone();
-        portal::request_screencast(move |portal_result| {
+        portal::request_screencast(source_types, move |portal_result| {
             match portal_result {
                 Ok(stream) => {
-                    let result = spawn_gstreamer(&state, stream, crop);
+                    let result = spawn_gstreamer(&state, stream, source_types, crop);
                     on_result(result);
                 }
                 Err(e) => on_result(Err(e)),
@@ -78,8 +79,8 @@ impl Recorder {
     /// Stop the ongoing recording and convert the captured video to a GIF.
     ///
     /// Returns the path of the saved GIF on success.
-    pub fn stop(&self) -> Result<PathBuf, String> {
-        let (mut child, raw_file, crop) = {
+    pub fn stop(&self, fps: u32) -> Result<PathBuf, String> {
+        let (mut child, raw_file, crop, source_types) = {
             let mut state = self.state.lock().unwrap();
             let child = state
                 .process
@@ -90,9 +91,10 @@ impl Recorder {
                 .take()
                 .ok_or_else(|| "Recording file path is missing".to_string())?;
             let crop = state.crop.take();
+            let source_types = state.source_types;
             // Drop the PipeWire fd to close the portal session.
             state._pipewire_fd = None;
-            (child, raw_file, crop)
+            (child, raw_file, crop, source_types)
         };
 
         // Ask GStreamer to flush and finalize the file via SIGINT, then wait
@@ -104,7 +106,13 @@ impl Recorder {
         // Determine output path.
         let gif_file = gif_output_path();
 
-        convert_to_gif(&raw_file, &gif_file, crop)?;
+        // When recording a single window the portal often delivers a
+        // monitor-sized stream with the window content centred and the
+        // surrounding area filled with black.  Detect and remove those borders
+        // automatically before converting to GIF.
+        let auto_crop_black = source_types == 2;
+
+        convert_to_gif(&raw_file, &gif_file, crop, fps, auto_crop_black)?;
 
         // Clean up the raw video.
         let _ = std::fs::remove_file(&raw_file);
@@ -121,6 +129,7 @@ impl Recorder {
 fn spawn_gstreamer(
     state: &Arc<Mutex<RecorderState>>,
     stream: PortalStream,
+    source_types: u32,
     crop: Option<Region>,
 ) -> Result<(), String> {
     let mut locked = state.lock().unwrap();
@@ -145,7 +154,7 @@ fn spawn_gstreamer(
         "videoconvert",
         "!",
         "x264enc",
-        "qp=0",
+        "quantizer=0",
         "speed-preset=ultrafast",
         "!",
         "matroskamux",
@@ -178,6 +187,7 @@ fn spawn_gstreamer(
     locked.process = Some(child);
     locked.raw_file = Some(raw_file);
     locked.crop = crop;
+    locked.source_types = source_types;
     locked._pipewire_fd = Some(stream.fd);
     Ok(())
 }
@@ -231,17 +241,70 @@ fn pictures_dir() -> Option<PathBuf> {
     }
 }
 
+/// Run ffmpeg's `cropdetect` filter on `input` and return the detected crop
+/// string (e.g. `"crop=1280:800:320:140"`) ready for use in a `-vf` chain.
+///
+/// We skip the first 10 frames (portal stream startup can produce blank
+/// frames) and analyse up to 240 frames to find a stable value.  Returns
+/// `None` if cropdetect produces no output or the video has no black borders.
+fn detect_crop_black(input: &PathBuf) -> Option<String> {
+    let output = Command::new("ffmpeg")
+        .args(["-i"])
+        .arg(input)
+        .args([
+            "-vf",
+            // limit=24: pixels darker than 24/255 treated as black.
+            // round=2:  keep even dimensions (safe for all codecs).
+            // skip=10:  ignore the first 10 frames (stream init black frames).
+            // reset=0:  accumulate the widest crop over all analysed frames.
+            "cropdetect=limit=24:round=2:skip=10:reset=0",
+            "-frames:v",
+            "240",
+            "-f",
+            "null",
+            "-",
+        ])
+        .output()
+        .ok()?;
+
+    // cropdetect writes "crop=W:H:X:Y" to stderr; take the last line (most
+    // stable after accumulation).
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    stderr.lines().rev().find_map(|line| {
+        let pos = line.find("crop=")?;
+        let rest = &line[pos + 5..];
+        let end = rest
+            .find(|c: char| !c.is_ascii_digit() && c != ':')
+            .unwrap_or(rest.len());
+        let crop = &rest[..end];
+        (crop.split(':').count() == 4).then(|| format!("crop={crop}"))
+    })
+}
+
 /// Convert a raw video file to GIF using `ffmpeg`.
 ///
 /// When `crop` is provided the video is cropped to the given region before
-/// being converted.  Uses a palette-based approach for high-quality output.
+/// being converted.  When `auto_crop_black` is true, `cropdetect` is run
+/// first to strip black borders that portals add around window captures.
+/// Uses a palette-based approach for high-quality output.
 fn convert_to_gif(
     input: &PathBuf,
     output: &PathBuf,
     crop: Option<Region>,
+    fps: u32,
+    auto_crop_black: bool,
 ) -> Result<(), String> {
     let mut filters = String::new();
 
+    // Auto-crop black borders produced by window-capture portal streams.
+    if auto_crop_black {
+        if let Some(crop_filter) = detect_crop_black(input) {
+            filters.push_str(&crop_filter);
+            filters.push(',');
+        }
+    }
+
+    // Manual crop region (from the region selector).
     if let Some(c) = crop {
         filters.push_str(&format!(
             "crop={}:{}:{}:{},",
@@ -249,10 +312,10 @@ fn convert_to_gif(
         ));
     }
 
-    filters.push_str(
-        "fps=10,split[s0][s1];\
-         [s0]palettegen[p];[s1][p]paletteuse",
-    );
+    filters.push_str(&format!(
+        "fps={fps},split[s0][s1];\
+         [s0]palettegen[p];[s1][p]paletteuse"
+    ));
 
     let status = Command::new("ffmpeg")
         .args(["-y", "-i"])

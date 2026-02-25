@@ -10,6 +10,15 @@ repository = "https://github.com/kmwallio/GifThatForYou"
 name = "gif-that-for-you"
 path = "src/main.rs"
 
+[lib]
+name = "gif_that_for_you"
+path = "src/lib.rs"
+
 [dependencies]
 gtk4 = { version = "0.9", features = ["v4_6"] }
 glib = "0.20"
+serde_json = "1"
+
+[[bin]]
+name = "gif-that-for-you-mcp"
+path = "src/bin/mcp.rs"

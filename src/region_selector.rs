@@ -106,10 +106,18 @@ where
                     let ex = start_pt.0 + ox;
                     let ey = start_pt.1 + oy;
 
-                    let x = sx.min(ex) as i32;
-                    let y = sy.min(ey) as i32;
-                    let w = (ex - sx).abs() as i32;
-                    let h = (ey - sy).abs() as i32;
+                    // GDK gesture coordinates are in logical (device-independent)
+                    // pixels.  The PipeWire screencast stream is delivered in
+                    // physical pixels, so scale the crop region up to match.
+                    let scale = gesture
+                        .widget()
+                        .map(|w| w.scale_factor())
+                        .unwrap_or(1) as f64;
+
+                    let x = (sx.min(ex) * scale) as i32;
+                    let y = (sy.min(ey) * scale) as i32;
+                    let w = ((ex - sx).abs() * scale) as i32;
+                    let h = ((ey - sy).abs() * scale) as i32;
 
                     // Require a minimum selection size.
                     if w > 10 && h > 10 {

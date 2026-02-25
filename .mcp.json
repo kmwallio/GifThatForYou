@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "gif-recorder": {
+      "command": "cargo",
+      "args": ["run", "--release", "--bin", "gif-that-for-you-mcp", "--quiet"]
+    }
+  }
+}
