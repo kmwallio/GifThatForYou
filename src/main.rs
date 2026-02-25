@@ -1,4 +1,5 @@
 mod indicator;
+mod portal;
 mod recorder;
 mod region_selector;
 mod window;

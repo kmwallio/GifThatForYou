@@ -27,7 +27,7 @@ pub fn build_ui(app: &Application) {
         .application(app)
         .title("GIF That For You")
         .default_width(360)
-        .default_height(180)
+        .default_height(200)
         .resizable(false)
         .build();
 
@@ -68,6 +68,7 @@ pub fn build_ui(app: &Application) {
         let window_clone = window.clone();
         let status = status_label.clone();
         full_btn.connect_clicked(move |_| {
+            status.set_text("Waiting for screen selection…");
             start_recording(&app_clone, &window_clone, &state, None, &status);
         });
     }
@@ -79,13 +80,15 @@ pub fn build_ui(app: &Application) {
         let window_clone = window.clone();
         let status = status_label.clone();
         region_btn.connect_clicked(move |_| {
-            // Hide main window while the user selects the region.
+            // First, let the user draw a crop region on the screen.
             window_clone.hide();
             let state2 = state.clone();
             let app2 = app_clone.clone();
             let win2 = window_clone.clone();
             let status2 = status.clone();
             region_selector::show_region_selector(&app_clone, move |region| {
+                status2.set_text("Waiting for screen selection…");
+                win2.present();
                 start_recording(&app2, &win2, &state2, Some(region), &status2);
             });
         });
@@ -106,35 +109,47 @@ pub fn build_ui(app: &Application) {
 // Helpers
 // ---------------------------------------------------------------------------
 
-/// Start recording (full screen or a specific region) and show the indicator.
+/// Start recording via the XDG ScreenCast portal.
+///
+/// The portal opens a system dialog for screen/window selection.  Once the
+/// user confirms, the GStreamer pipeline starts and the recording indicator
+/// appears.
 fn start_recording(
     app: &Application,
     window: &ApplicationWindow,
     state: &Rc<RefCell<AppState>>,
-    region: Option<Region>,
+    crop: Option<Region>,
     status: &Label,
 ) {
     let recorder = state.borrow().recorder.clone();
-    match recorder.start(region) {
-        Ok(()) => {
-            // Hide the main window while recording.
-            window.hide();
 
-            let state_clone = state.clone();
-            let window_clone = window.clone();
-            let status_clone = status.clone();
+    let app_clone = app.clone();
+    let state_clone = state.clone();
+    let window_clone = window.clone();
+    let status_clone = status.clone();
 
-            let indicator_win = indicator::show_indicator(app, move || {
-                do_stop_recording(&state_clone, &window_clone, &status_clone);
-            });
+    recorder.start_portal(crop, move |result| {
+        match result {
+            Ok(()) => {
+                // Hide the main window while recording.
+                window_clone.hide();
 
-            state.borrow_mut().indicator_window = Some(indicator_win);
+                let state_inner = state_clone.clone();
+                let window_inner = window_clone.clone();
+                let status_inner = status_clone.clone();
+
+                let indicator_win = indicator::show_indicator(&app_clone, move || {
+                    do_stop_recording(&state_inner, &window_inner, &status_inner);
+                });
+
+                state_clone.borrow_mut().indicator_window = Some(indicator_win);
+            }
+            Err(e) => {
+                status_clone.set_text(&format!("Error: {e}"));
+                window_clone.present();
+            }
         }
-        Err(e) => {
-            status.set_text(&format!("Error: {e}"));
-            window.present();
-        }
-    }
+    });
 }
 
 /// Stop the current recording, convert to GIF, and restore the main window.
