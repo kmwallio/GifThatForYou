@@ -68,11 +68,16 @@ pub fn build_ui(app: &Application) {
     status_label.set_wrap(true);
     status_label.add_css_class("dim-label");
 
+    // Group the three record buttons so they can be disabled as a unit while
+    // the portal dialog is open, preventing a second concurrent portal session.
+    let record_buttons = GtkBox::new(Orientation::Vertical, 12);
+    record_buttons.append(&full_btn);
+    record_buttons.append(&window_btn);
+    record_buttons.append(&region_btn);
+
     vbox.append(&title_label);
     vbox.append(&hint_label);
-    vbox.append(&full_btn);
-    vbox.append(&window_btn);
-    vbox.append(&region_btn);
+    vbox.append(&record_buttons);
     vbox.append(&fps_row);
     vbox.append(&status_label);
 
@@ -95,9 +100,10 @@ pub fn build_ui(app: &Application) {
         let app_clone = app.clone();
         let window_clone = window.clone();
         let status = status_label.clone();
+        let btns = record_buttons.clone();
         full_btn.connect_clicked(move |_| {
             status.set_text("Waiting for screen selection…");
-            start_recording(&app_clone, &window_clone, &state, 1, None, &status);
+            start_recording(&app_clone, &window_clone, &state, 1, None, &status, &btns);
         });
     }
 
@@ -107,9 +113,10 @@ pub fn build_ui(app: &Application) {
         let app_clone = app.clone();
         let window_clone = window.clone();
         let status = status_label.clone();
+        let btns = record_buttons.clone();
         window_btn.connect_clicked(move |_| {
             status.set_text("Waiting for window selection…");
-            start_recording(&app_clone, &window_clone, &state, 2, None, &status);
+            start_recording(&app_clone, &window_clone, &state, 2, None, &status, &btns);
         });
     }
 
@@ -119,6 +126,7 @@ pub fn build_ui(app: &Application) {
         let app_clone = app.clone();
         let window_clone = window.clone();
         let status = status_label.clone();
+        let btns = record_buttons.clone();
         region_btn.connect_clicked(move |_| {
             // First, let the user draw a crop region on the screen.
             window_clone.hide();
@@ -126,10 +134,11 @@ pub fn build_ui(app: &Application) {
             let app2 = app_clone.clone();
             let win2 = window_clone.clone();
             let status2 = status.clone();
+            let btns2 = btns.clone();
             region_selector::show_region_selector(&app_clone, move |region| {
                 status2.set_text("Waiting for screen selection…");
                 win2.present();
-                start_recording(&app2, &win2, &state2, 1, Some(region), &status2);
+                start_recording(&app2, &win2, &state2, 1, Some(region), &status2, &btns2);
             });
         });
     }
@@ -161,15 +170,24 @@ fn start_recording(
     source_types: u32,
     crop: Option<Region>,
     status: &Label,
+    record_buttons: &GtkBox,
 ) {
     let recorder = state.borrow().recorder.clone();
+
+    // Disable all record buttons while the portal dialog is open so the user
+    // cannot start a second concurrent portal session.
+    record_buttons.set_sensitive(false);
 
     let app_clone = app.clone();
     let state_clone = state.clone();
     let window_clone = window.clone();
     let status_clone = status.clone();
+    let btns_clone = record_buttons.clone();
 
     recorder.start_portal(source_types, crop, move |result| {
+        // Re-enable buttons whether the portal succeeded or failed.
+        btns_clone.set_sensitive(true);
+
         match result {
             Ok(()) => {
                 // Hide the main window while recording.

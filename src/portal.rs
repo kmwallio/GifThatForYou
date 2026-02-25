@@ -1,11 +1,23 @@
 use std::cell::RefCell;
 use std::os::fd::{FromRawFd, OwnedFd};
 use std::rc::Rc;
+use std::sync::atomic::{AtomicU32, Ordering};
 
 use glib::variant::ObjectPath;
 use gtk4::gio;
 use gtk4::gio::prelude::*;
 use gtk4::glib;
+
+/// Monotonically increasing counter shared across all portal sessions.
+///
+/// Using a per-session counter that resets to 1 every time means each new
+/// recording subscribes to the same D-Bus request paths
+/// (`.../gif_that_for_you_1`, `_2`, `_3`).  Old subscriptions are never
+/// removed, so when a second recording fires on those paths the zombie
+/// callbacks from the first session also wake up and make duplicate D-Bus
+/// calls that the portal rejects.  A global counter guarantees every token
+/// is unique for the lifetime of the process.
+static GLOBAL_TOKEN: AtomicU32 = AtomicU32::new(1);
 
 const PORTAL_BUS_NAME: &str = "org.freedesktop.portal.Desktop";
 const PORTAL_OBJECT_PATH: &str = "/org/freedesktop/portal/desktop";
@@ -24,7 +36,6 @@ pub struct PortalStream {
 struct PortalState {
     connection: gio::DBusConnection,
     session_handle: Option<String>,
-    counter: u32,
     /// Source types bitmask: 1=MONITOR, 2=WINDOW, 3=BOTH
     source_types: u32,
 }
@@ -52,7 +63,6 @@ where
     let state = Rc::new(RefCell::new(PortalState {
         connection: connection.clone(),
         session_handle: None,
-        counter: 0,
         source_types,
     }));
 
@@ -293,10 +303,9 @@ fn step_open_pipewire_remote(
 // Helpers
 // ---------------------------------------------------------------------------
 
-fn next_token(state: &Rc<RefCell<PortalState>>) -> String {
-    let mut s = state.borrow_mut();
-    s.counter += 1;
-    format!("gif_that_for_you_{}", s.counter)
+fn next_token(_state: &Rc<RefCell<PortalState>>) -> String {
+    let n = GLOBAL_TOKEN.fetch_add(1, Ordering::Relaxed);
+    format!("gif_that_for_you_{n}")
 }
 
 fn make_request_path(connection: &gio::DBusConnection, token: &str) -> String {
