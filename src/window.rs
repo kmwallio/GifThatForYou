@@ -1,8 +1,11 @@
 use std::cell::RefCell;
 use std::rc::Rc;
 
+use gtk4::glib;
 use gtk4::prelude::*;
-use gtk4::{Application, ApplicationWindow, Box as GtkBox, Button, DropDown, Label, Orientation};
+use gtk4::{
+    Application, ApplicationWindow, Box as GtkBox, Button, DropDown, Label, Orientation, Spinner,
+};
 
 use crate::indicator;
 use crate::recorder::{Recorder, Region};
@@ -191,6 +194,11 @@ fn start_recording(
 }
 
 /// Stop the current recording, convert to GIF, and restore the main window.
+///
+/// The ffmpeg conversion is blocking and can take several seconds, so it runs
+/// on a background thread.  A spinner window is shown while work is in
+/// progress and closed once the result arrives back on the main thread via a
+/// glib channel.
 fn do_stop_recording(
     state: &Rc<RefCell<AppState>>,
     window: &ApplicationWindow,
@@ -203,16 +211,81 @@ fn do_stop_recording(
 
     let recorder = state.borrow().recorder.clone();
     let fps = state.borrow().fps;
-    match recorder.stop(fps) {
-        Ok(path) => {
-            status.set_text(&format!("Saved: {}", path.to_string_lossy()));
-        }
-        Err(e) => {
-            status.set_text(&format!("Error: {e}"));
-        }
-    }
 
-    window.present();
+    // Show "Animating GIF…" spinner window while ffmpeg runs.
+    let processing_win = show_processing_window(window);
+
+    // Run the blocking ffmpeg conversion on a background thread and send the
+    // result back through a std mpsc channel.
+    let (tx, rx) = std::sync::mpsc::channel::<Result<std::path::PathBuf, String>>();
+    std::thread::spawn(move || {
+        let _ = tx.send(recorder.stop(fps));
+    });
+
+    // Poll the channel from the GLib main loop every 100 ms (no Send
+    // constraint needed for timeout_add_local).
+    let processing_win_clone = processing_win.clone();
+    let status_clone = status.clone();
+    let window_clone = window.clone();
+    glib::timeout_add_local(std::time::Duration::from_millis(100), move || {
+        match rx.try_recv() {
+            Ok(result) => {
+                processing_win_clone.close();
+                match result {
+                    Ok(path) => {
+                        status_clone.set_text(&format!("Saved: {}", path.to_string_lossy()))
+                    }
+                    Err(e) => status_clone.set_text(&format!("Error: {e}")),
+                }
+                window_clone.present();
+                glib::ControlFlow::Break
+            }
+            Err(std::sync::mpsc::TryRecvError::Empty) => glib::ControlFlow::Continue,
+            Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                // Shouldn't happen, but stop polling and restore the window.
+                processing_win_clone.close();
+                window_clone.present();
+                glib::ControlFlow::Break
+            }
+        }
+    });
+}
+
+/// Show a small modal window with a spinner and "Animating GIF…" label.
+///
+/// The window is transient for `parent` so it stays on top and is associated
+/// with the app in the taskbar.  It has no close button — it is closed
+/// programmatically once conversion finishes.
+fn show_processing_window(parent: &ApplicationWindow) -> gtk4::Window {
+    let win = gtk4::Window::builder()
+        .transient_for(parent)
+        .modal(true)
+        .resizable(false)
+        .deletable(false)
+        .title("GIF That For You")
+        .default_width(220)
+        .default_height(100)
+        .build();
+
+    let vbox = GtkBox::new(Orientation::Vertical, 12);
+    vbox.set_margin_top(24);
+    vbox.set_margin_bottom(24);
+    vbox.set_margin_start(24);
+    vbox.set_margin_end(24);
+    vbox.set_halign(gtk4::Align::Center);
+    vbox.set_valign(gtk4::Align::Center);
+
+    let spinner = Spinner::new();
+    spinner.set_halign(gtk4::Align::Center);
+    spinner.start();
+
+    let label = Label::new(Some("Animating GIF…"));
+
+    vbox.append(&spinner);
+    vbox.append(&label);
+    win.set_child(Some(&vbox));
+    win.present();
+    win
 }
 
 /// Register `Ctrl+Shift+R` as an application-level action to stop recording.

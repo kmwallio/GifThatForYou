@@ -296,6 +296,12 @@ fn convert_to_gif(
 ) -> Result<(), String> {
     let mut filters = String::new();
 
+    // Trim the first 0.3 s of the raw video.  The GStreamer/PipeWire pipeline
+    // produces partially-initialised frames during stream negotiation that
+    // appear pixelated in the output GIF.  setpts resets timestamps after the
+    // trim so the GIF starts cleanly at t=0.
+    filters.push_str("trim=start=0.3,setpts=PTS-STARTPTS,");
+
     // Auto-crop black borders produced by window-capture portal streams.
     if auto_crop_black {
         if let Some(crop_filter) = detect_crop_black(input) {
