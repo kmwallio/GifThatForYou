@@ -79,7 +79,7 @@ impl Recorder {
     ///
     /// Returns the path of the saved GIF on success.
     pub fn stop(&self) -> Result<PathBuf, String> {
-        let (child, raw_file, crop) = {
+        let (mut child, raw_file, crop) = {
             let mut state = self.state.lock().unwrap();
             let child = state
                 .process
@@ -95,11 +95,11 @@ impl Recorder {
             (child, raw_file, crop)
         };
 
-        // Send SIGINT/EOS so GStreamer flushes and closes the file cleanly.
+        // Ask GStreamer to flush and finalize the file via SIGINT, then wait
+        // for the process to fully exit.  mp4mux writes the moov atom only on
+        // clean shutdown, so we must not touch the file until it exits.
         send_sigint(child.id());
-
-        // Give GStreamer a moment to finish writing.
-        std::thread::sleep(std::time::Duration::from_millis(800));
+        let _ = child.wait();
 
         // Determine output path.
         let gif_file = gif_output_path();
@@ -128,7 +128,11 @@ fn spawn_gstreamer(
         return Err("Already recording".to_string());
     }
 
-    let raw_file = std::env::temp_dir().join("gif-that-for-you-raw.mp4");
+    // Use MKV (Matroska) instead of MP4: matroskamux writes data
+    // sequentially so the file is always valid regardless of how the
+    // pipeline is terminated, avoiding the "moov atom not found" error
+    // that mp4mux produces when EOS doesn't propagate cleanly.
+    let raw_file = std::env::temp_dir().join("gif-that-for-you-raw.mkv");
     let raw_fd = stream.fd.as_raw_fd();
 
     let mut cmd = Command::new("gst-launch-1.0");
@@ -141,10 +145,10 @@ fn spawn_gstreamer(
         "videoconvert",
         "!",
         "x264enc",
+        "qp=0",
         "speed-preset=ultrafast",
-        "tune=zerolatency",
         "!",
-        "mp4mux",
+        "matroskamux",
         "!",
         "filesink",
         &format!("location={}", raw_file.display()),
@@ -246,7 +250,7 @@ fn convert_to_gif(
     }
 
     filters.push_str(
-        "fps=10,scale=800:-1:flags=lanczos,split[s0][s1];\
+        "fps=10,split[s0][s1];\
          [s0]palettegen[p];[s1][p]paletteuse",
     );
 

@@ -98,7 +98,7 @@ fn step_create_session(
     options.insert("session_handle_token", &session_token);
     let params = glib::Variant::tuple_from_iter([options.end()]);
 
-    call_portal_method(&state.borrow().connection, "CreateSession", &params);
+    call_portal_method(&state.borrow().connection, "CreateSession", &params, on_ready);
 }
 
 // ---------------------------------------------------------------------------
@@ -111,7 +111,13 @@ fn step_select_sources(
 ) {
     let token = next_token(&state);
     let request_path = make_request_path(&state.borrow().connection, &token);
-    let session_handle = state.borrow().session_handle.clone().unwrap();
+    let session_handle = match state.borrow().session_handle.clone() {
+        Some(h) => h,
+        None => {
+            on_ready(Err("Portal: session_handle missing in SelectSources".into()));
+            return;
+        }
+    };
 
     let state2 = state.clone();
     let on_ready2 = on_ready.clone();
@@ -134,11 +140,17 @@ fn step_select_sources(
     // cursor_mode: 2 = EMBEDDED (draw cursor into the stream)
     options.insert("cursor_mode", 2u32);
 
-    let obj_path = ObjectPath::try_from(session_handle.as_str()).unwrap();
+    let obj_path = match ObjectPath::try_from(session_handle.as_str()) {
+        Ok(p) => p,
+        Err(e) => {
+            on_ready(Err(format!("Portal: invalid session_handle in SelectSources: {e}")));
+            return;
+        }
+    };
     let params =
         glib::Variant::tuple_from_iter([obj_path.to_variant(), options.end()]);
 
-    call_portal_method(&state.borrow().connection, "SelectSources", &params);
+    call_portal_method(&state.borrow().connection, "SelectSources", &params, on_ready);
 }
 
 // ---------------------------------------------------------------------------
@@ -151,7 +163,13 @@ fn step_start(
 ) {
     let token = next_token(&state);
     let request_path = make_request_path(&state.borrow().connection, &token);
-    let session_handle = state.borrow().session_handle.clone().unwrap();
+    let session_handle = match state.borrow().session_handle.clone() {
+        Some(h) => h,
+        None => {
+            on_ready(Err("Portal: session_handle missing in Start".into()));
+            return;
+        }
+    };
 
     let state2 = state.clone();
     let on_ready2 = on_ready.clone();
@@ -177,14 +195,20 @@ fn step_start(
     let options = glib::VariantDict::new(None);
     options.insert("handle_token", &token);
 
-    let obj_path = ObjectPath::try_from(session_handle.as_str()).unwrap();
+    let obj_path = match ObjectPath::try_from(session_handle.as_str()) {
+        Ok(p) => p,
+        Err(e) => {
+            on_ready(Err(format!("Portal: invalid session_handle in Start: {e}")));
+            return;
+        }
+    };
     let params = glib::Variant::tuple_from_iter([
         obj_path.to_variant(),
         String::new().to_variant(),
         options.end(),
     ]);
 
-    call_portal_method(&state.borrow().connection, "Start", &params);
+    call_portal_method(&state.borrow().connection, "Start", &params, on_ready);
 }
 
 // ---------------------------------------------------------------------------
@@ -196,11 +220,23 @@ fn step_open_pipewire_remote(
     node_id: u32,
     on_ready: Rc<dyn Fn(Result<PortalStream, String>)>,
 ) {
-    let session_handle = state.borrow().session_handle.clone().unwrap();
+    let session_handle = match state.borrow().session_handle.clone() {
+        Some(h) => h,
+        None => {
+            on_ready(Err("Portal: session_handle missing in OpenPipeWireRemote".into()));
+            return;
+        }
+    };
     let connection = state.borrow().connection.clone();
 
     let options = glib::VariantDict::new(None);
-    let obj_path = ObjectPath::try_from(session_handle.as_str()).unwrap();
+    let obj_path = match ObjectPath::try_from(session_handle.as_str()) {
+        Ok(p) => p,
+        Err(e) => {
+            on_ready(Err(format!("Portal: invalid session_handle in OpenPipeWireRemote: {e}")));
+            return;
+        }
+    };
     let params =
         glib::Variant::tuple_from_iter([obj_path.to_variant(), options.end()]);
 
@@ -219,9 +255,17 @@ fn step_open_pipewire_remote(
     ) {
         Ok((result, fd_list)) => {
             if let Some(fd_list) = fd_list {
-                // The result is a tuple (h,) where h is an index into the fd
-                // list.
-                let idx = result.child_get::<i32>(0);
+                // The result is a tuple (h,) where h is a Unix fd list index.
+                // GVariant type 'h' has the same encoding as 'i' but is a
+                // distinct type, so get::<i32>() returns None.  Use the GLib
+                // C API directly to extract the handle value.
+                let idx = unsafe {
+                    glib::ffi::g_variant_get_handle(result.child_value(0).as_ptr())
+                };
+                if idx < 0 {
+                    on_ready(Err("Portal: invalid fd index in OpenPipeWireRemote".into()));
+                    return;
+                }
                 match fd_list_steal(fd_list, idx) {
                     Some(fd) => {
                         on_ready(Ok(PortalStream { fd, node_id }));
@@ -278,11 +322,15 @@ where
         Some("Response"),
         Some(&path_owned),
         None,
-        gio::DBusSignalFlags::NO_MATCH_RULE,
+        gio::DBusSignalFlags::NONE,
         move |_conn, _sender, _path, _iface, _signal, params| {
             // params is (uint32 response, a{sv} results)
-            let response = params.child_get::<u32>(0);
-            let results = params.child_get::<glib::Variant>(1);
+            if params.n_children() < 2 {
+                eprintln!("Portal: received Response signal with fewer than 2 arguments");
+                return;
+            }
+            let response = params.child_value(0).get::<u32>().unwrap_or(2);
+            let results = params.child_value(1);
             callback(response, results);
         },
     );
@@ -292,7 +340,10 @@ fn call_portal_method(
     connection: &gio::DBusConnection,
     method: &str,
     params: &glib::Variant,
+    on_ready: Rc<dyn Fn(Result<PortalStream, String>)>,
 ) {
+    let on_ready2 = on_ready.clone();
+    let method_owned = method.to_string();
     connection.call(
         Some(PORTAL_BUS_NAME),
         PORTAL_OBJECT_PATH,
@@ -303,38 +354,96 @@ fn call_portal_method(
         gio::DBusCallFlags::NONE,
         -1,
         gio::Cancellable::NONE,
-        |_result| {
-            // The actual response comes via the Request signal; we ignore the
-            // method return value here (it's just the request object path).
+        move |result| {
+            if let Err(e) = result {
+                on_ready2(Err(format!("Portal: {method_owned} method call failed: {e}")));
+            }
         },
     );
 }
 
 fn portal_error(step: &str, response: u32) -> String {
     match response {
-        1 => format!("Portal: user cancelled at {step}"),
+        1 => format!("Portal: user cancelled at {step} (1)"),
+        2 => format!("Portal: {step} failed: Other error (2)"),
+        3 => format!("Portal: {step} failed: Not found (3)"),
         _ => format!("Portal: {step} failed (response code {response})"),
     }
 }
 
-/// Look up a string value in a portal `a{{sv}}` response dict.
+/// Look up a string value in a portal `a{sv}` response dict.
 fn variant_dict_lookup_str(dict_variant: &glib::Variant, key: &str) -> Option<String> {
-    let dict = glib::VariantDict::new(Some(dict_variant));
+    let dict_variant = if dict_variant.type_() == glib::VariantTy::VARIANT {
+        dict_variant.child_value(0)
+    } else {
+        dict_variant.clone()
+    };
+    let dict = glib::VariantDict::new(Some(&dict_variant));
     dict.lookup::<String>(key).ok()?
 }
 
 /// Parse the `streams` array from the Start response to extract the first
 /// PipeWire node ID.
 ///
-/// The streams value is `a(ua{{sv}})` – an array of (node_id, properties).
+/// The streams value is `a(ua{sv})` – an array of (node_id, properties).
 fn parse_streams(results: &glib::Variant) -> Option<u32> {
-    let dict = glib::VariantDict::new(Some(results));
-    let streams = dict.lookup::<glib::Variant>("streams").ok()??;
-    // streams is a(ua{sv})
-    let first = streams.child_value(0);
-    // first is (ua{sv})
-    let node_id = first.child_get::<u32>(0);
-    Some(node_id)
+    // Some portals wrap the results dictionary in an extra Variant.
+    let results = if results.type_() == glib::VariantTy::VARIANT {
+        results.child_value(0)
+    } else {
+        results.clone()
+    };
+
+    // Manually scan the a{sv} dict for the "streams" key.  Using
+    // VariantDict::lookup::<Variant> can silently fail because the value is
+    // stored as type 'v' in the dict and the returned variant may still carry
+    // the extra 'v' wrapper depending on the glib-rs version.
+    for i in 0..results.n_children() {
+        let entry = results.child_value(i);
+        if entry.n_children() < 2 {
+            continue;
+        }
+        let Some(key) = entry.child_value(0).get::<String>() else {
+            continue;
+        };
+        if key != "streams" {
+            continue;
+        }
+
+        // In a{sv} the value is always stored as type 'v'; unbox it.
+        let boxed = entry.child_value(1);
+        let streams = if boxed.type_() == glib::VariantTy::VARIANT {
+            boxed.child_value(0)
+        } else {
+            boxed
+        };
+
+        // streams is a(ua{sv}) — an array of (node_id, properties) tuples.
+        if streams.n_children() == 0 {
+            eprintln!("Portal: 'streams' array is empty in Start response");
+            return None;
+        }
+        let first = streams.child_value(0);
+        // first is (u, a{sv}) where child 0 is the node_id.
+        if first.n_children() < 1 {
+            return None;
+        }
+        return first.child_value(0).get::<u32>();
+    }
+
+    // "streams" not found — collect keys for debugging.
+    let keys: Vec<String> = (0..results.n_children())
+        .filter_map(|i| {
+            let e = results.child_value(i);
+            if e.n_children() >= 1 {
+                e.child_value(0).get::<String>()
+            } else {
+                None
+            }
+        })
+        .collect();
+    eprintln!("Portal: 'streams' missing in Start response. Keys found: {:?}", keys);
+    None
 }
 
 /// Extract a file descriptor from a `GUnixFDList` and wrap it in `OwnedFd`.
