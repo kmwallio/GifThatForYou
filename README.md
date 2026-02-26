@@ -6,6 +6,8 @@ GIF Screen Recorder
 
 A GTK4 screen recording utility written in Rust, compatible with Wayland.
 
+![Screenshot of GifThatForYou](gifthatforyou.png)
+
 ## Features
 
 - **Record entire screen**, **record a specific window**, or **select a region** to record
