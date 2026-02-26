@@ -3,7 +3,7 @@ runtime: org.gnome.Platform
 runtime-version: "49"
 sdk: org.gnome.Sdk
 sdk-extensions:
-  - org.freedesktop.Sdk.Extension.rust-stable
+  - org.freedesktop.Sdk.Extension
 
 command: gif-that-for-you
 
@@ -21,7 +21,7 @@ build-options:
   # Bring the Rust toolchain into PATH
   append-path: /usr/lib/sdk/rust-stable/bin
   env:
-    CARGO_HOME: /run/build/gif-that-for-you/cargo-home
+    CARGO_HOME: /run/build/gif-that-for-you/cargo
 
 modules:
   # ── ffmpeg ────────────────────────────────────────────────────────────────
@@ -52,7 +52,7 @@ modules:
       # Demuxer: Matroska/MKV (the intermediate container)
       - --enable-demuxer=matroska
       # Encoder + muxer: animated GIF output
-      - --enable-encoder=gif
+      - --enable-encoder=gif,ffv1
       - --enable-muxer=gif
       # Null muxer: used by the cropdetect analysis pass (-f null -)
       - --enable-muxer=null
@@ -72,10 +72,11 @@ modules:
       - --enable-ffmpeg
       - --disable-ffplay
       - --disable-ffprobe
+      - --disable-doc
     sources:
       - type: archive
         url: https://ffmpeg.org/releases/ffmpeg-7.1.tar.xz
-        sha256: 3990796ef85ef7e8490643064673931997d8ff72f311f459f3e16d0be8850948 # see comment above
+        sha256: 40973d44970dbc83ef302b0609f2e74982be2d85916dd2ee7472d30678a7abe6 # see comment above
 
   # ── gst-libav ─────────────────────────────────────────────────────────────
   # Provides the avenc_ffv1 GStreamer element (FFV1 lossless encoder) used
