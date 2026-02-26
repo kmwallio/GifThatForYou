@@ -1,4 +1,7 @@
 # GifThatForYou
+
+<img src="data/icons/hicolor/scalable/apps/io.github.kmwallio.GifThatForYou.svg" alt="GifThatForYou app icon" width="128" />
+
 GIF Screen Recorder
 
 A GTK4 screen recording utility written in Rust, compatible with Wayland.

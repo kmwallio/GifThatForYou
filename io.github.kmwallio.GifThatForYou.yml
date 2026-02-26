@@ -130,6 +130,9 @@ modules:
       # AppStream metainfo
       - install -Dm644 io.github.kmwallio.GifThatForYou.metainfo.xml
         /app/share/metainfo/io.github.kmwallio.GifThatForYou.metainfo.xml
+      # App icon
+      - install -Dm644 data/icons/hicolor/scalable/apps/io.github.kmwallio.GifThatForYou.svg
+        /app/share/icons/hicolor/scalable/apps/io.github.kmwallio.GifThatForYou.svg
     sources:
       - type: dir
         path: .
