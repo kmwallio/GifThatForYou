@@ -80,7 +80,7 @@ impl Recorder {
     ///
     /// Returns the path of the saved GIF on success.
     pub fn stop(&self, fps: u32) -> Result<PathBuf, String> {
-        let (mut child, raw_file, crop, source_types) = {
+        let (mut child, raw_file, crop, source_types, pipewire_fd) = {
             let mut state = self.state.lock().unwrap();
             let child = state
                 .process
@@ -92,16 +92,21 @@ impl Recorder {
                 .ok_or_else(|| "Recording file path is missing".to_string())?;
             let crop = state.crop.take();
             let source_types = state.source_types;
-            // Drop the PipeWire fd to close the portal session.
-            state._pipewire_fd = None;
-            (child, raw_file, crop, source_types)
+            // Take the fd out but do NOT drop it yet — GStreamer must finish
+            // reading from PipeWire before the fd is closed, otherwise the
+            // source errors out mid-stream and the file is left incomplete.
+            let pipewire_fd = state._pipewire_fd.take();
+            (child, raw_file, crop, source_types, pipewire_fd)
         };
 
-        // Ask GStreamer to flush and finalize the file via SIGINT, then wait
-        // for the process to fully exit.  mp4mux writes the moov atom only on
-        // clean shutdown, so we must not touch the file until it exits.
+        // Signal gst-launch to send EOS and wait for a clean exit.  The
+        // PipeWire fd must still be open at this point so the source can
+        // drain cleanly.
         send_sigint(child.id());
         let _ = child.wait();
+
+        // Now it is safe to close the PipeWire fd and end the portal session.
+        drop(pipewire_fd);
 
         // Determine output path.
         let gif_file = gif_output_path();
@@ -137,10 +142,20 @@ fn spawn_gstreamer(
         return Err("Already recording".to_string());
     }
 
-    // Use MKV (Matroska) instead of MP4: matroskamux writes data
-    // sequentially so the file is always valid regardless of how the
-    // pipeline is terminated, avoiding the "moov atom not found" error
-    // that mp4mux produces when EOS doesn't propagate cleanly.
+    // FFV1 is a truly lossless codec with no chroma subsampling and no DCT
+    // block artefacts.  x264enc at any quality setting uses 4:2:0 chroma
+    // subsampling which destroys colour detail before ffmpeg even sees the
+    // file, and the DCT transform introduces block artefacts that pollute the
+    // GIF palette.  FFV1 gives ffmpeg pixel-perfect screen content to work
+    // from, which dramatically improves GIF quality.
+    //
+    // avenc_ffv1 comes from the gst-libav package:
+    //   · Arch:   pacman -S gst-libav
+    //   · Ubuntu: apt install gstreamer1.0-libav
+    //
+    // MKV is FFV1's natural container and writes data sequentially so the
+    // file is readable even if gst-launch exits before writing the final
+    // index — especially important for our SIGINT-based stop flow.
     let raw_file = std::env::temp_dir().join("gif-that-for-you-raw.mkv");
     let raw_fd = stream.fd.as_raw_fd();
 
@@ -153,9 +168,7 @@ fn spawn_gstreamer(
         "!",
         "videoconvert",
         "!",
-        "x264enc",
-        "quantizer=0",
-        "speed-preset=ultrafast",
+        "avenc_ffv1",
         "!",
         "matroskamux",
         "!",
@@ -177,10 +190,11 @@ fn spawn_gstreamer(
     let child = cmd.spawn().map_err(|e| {
         format!(
             "Failed to start gst-launch-1.0: {e}\n\
-             Please install GStreamer and the PipeWire GStreamer plugin:\n\
-             · Arch: pacman -S gstreamer gst-plugins-base gst-plugins-good gst-plugin-pipewire\n\
+             Please install GStreamer with the PipeWire and libav plugins:\n\
+             · Arch:   pacman -S gstreamer gst-plugins-base gst-plugins-good \
+               gst-plugin-pipewire gst-libav\n\
              · Ubuntu: apt install gstreamer1.0-tools gstreamer1.0-plugins-base \
-               gstreamer1.0-plugins-good gstreamer1.0-plugins-ugly gstreamer1.0-pipewire"
+               gstreamer1.0-plugins-good gstreamer1.0-pipewire gstreamer1.0-libav"
         )
     })?;
 
@@ -244,20 +258,28 @@ fn pictures_dir() -> Option<PathBuf> {
 /// Run ffmpeg's `cropdetect` filter on `input` and return the detected crop
 /// string (e.g. `"crop=1280:800:320:140"`) ready for use in a `-vf` chain.
 ///
-/// We skip the first 10 frames (portal stream startup can produce blank
-/// frames) and analyse up to 240 frames to find a stable value.  Returns
-/// `None` if cropdetect produces no output or the video has no black borders.
+/// The same 0.3 s trim that the GIF conversion applies is used here so that
+/// cropdetect sees exactly the frames that will appear in the output.  Using
+/// skip=10 on the raw file instead caused the detector to see startup frames
+/// that land outside the trimmed range, producing wrong crop coordinates.
+///
+/// Returns `None` if cropdetect produces no output or the video has no black
+/// borders.
 fn detect_crop_black(input: &PathBuf) -> Option<String> {
     let output = Command::new("ffmpeg")
         .args(["-i"])
         .arg(input)
         .args([
             "-vf",
-            // limit=24: pixels darker than 24/255 treated as black.
+            // Trim the same startup frames the GIF conversion will skip, then
+            // run cropdetect on the stable content.
+            // limit=10: only treat near-zero pixels as black.  limit=24 is too
+            //   aggressive and clips window shadows / dark-themed app borders.
+            //   The portal's solid black surround is 0,0,0 so limit=10 is
+            //   still more than sufficient to detect it.
             // round=2:  keep even dimensions (safe for all codecs).
-            // skip=10:  ignore the first 10 frames (stream init black frames).
             // reset=0:  accumulate the widest crop over all analysed frames.
-            "cropdetect=limit=24:round=2:skip=10:reset=0",
+            "trim=start=0.3,setpts=PTS-STARTPTS,cropdetect=limit=10:round=2:reset=0",
             "-frames:v",
             "240",
             "-f",
@@ -319,8 +341,19 @@ fn convert_to_gif(
     }
 
     filters.push_str(&format!(
+        // palettegen stats_mode=diff: build the palette from inter-frame
+        // pixel differences rather than all pixels, which gives much better
+        // colour representation for animated content.
+        //
+        // paletteuse floyd_steinberg + diff_mode=rectangle: error-diffusion
+        // dithering (smooth gradients, no ordered-dither grid pattern) and
+        // only re-encode the rectangular region that changed each frame.
+        //
+        // No yadif — PipeWire screen captures are always progressive so
+        // deinterlacing is unnecessary and can misinterpret FFV1 frame flags.
         "fps={fps},split[s0][s1];\
-         [s0]palettegen[p];[s1][p]paletteuse"
+         [s0]palettegen=stats_mode=diff[p];\
+         [s1][p]paletteuse=dither=floyd_steinberg:diff_mode=rectangle"
     ));
 
     let status = Command::new("ffmpeg")
