@@ -1,0 +1,24 @@
+[package]
+name = "gif-that-for-you"
+version = "0.1.0"
+edition = "2021"
+description = "A GTK4 screen recording utility written in Rust compatible with Wayland"
+license = "GPL-3.0-or-later"
+repository = "https://github.com/kmwallio/GifThatForYou"
+
+[[bin]]
+name = "gif-that-for-you"
+path = "src/main.rs"
+
+[lib]
+name = "gif_that_for_you"
+path = "src/lib.rs"
+
+[dependencies]
+gtk4 = { version = "0.9", features = ["v4_6"] }
+glib = "0.20"
+serde_json = "1"
+
+[[bin]]
+name = "gif-that-for-you-mcp"
+path = "src/bin/mcp.rs"

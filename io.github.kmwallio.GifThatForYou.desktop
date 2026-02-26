@@ -1,0 +1,9 @@
+[Desktop Entry]
+Name=GifThatForYou
+Comment=Record your screen as an animated GIF
+Exec=gif-that-for-you
+Icon=io.github.kmwallio.GifThatForYou
+Type=Application
+Categories=Utility;Video;
+Keywords=gif;screen;record;screenshot;capture;wayland;
+StartupWMClass=gif-that-for-you

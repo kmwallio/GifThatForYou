@@ -1,0 +1,140 @@
+app-id: io.github.kmwallio.GifThatForYou
+runtime: org.gnome.Platform
+runtime-version: "49"
+sdk: org.gnome.Sdk
+sdk-extensions:
+  - org.freedesktop.Sdk.Extension.rust-stable
+
+command: gif-that-for-you
+
+finish-args:
+  # Wayland display
+  - --socket=wayland
+  # Shared memory (IPC) needed by some GTK internals
+  - --share=ipc
+  # Save GIFs to ~/Pictures
+  - --filesystem=xdg-pictures:create
+  # XDG Desktop Portal — ScreenCast API for screen/window capture
+  - --talk-name=org.freedesktop.portal.Desktop
+
+build-options:
+  # Bring the Rust toolchain into PATH
+  append-path: /usr/lib/sdk/rust-stable/bin
+  env:
+    CARGO_HOME: /run/build/gif-that-for-you/cargo-home
+
+modules:
+  # ── ffmpeg ────────────────────────────────────────────────────────────────
+  # Used at runtime to convert the raw FFV1/MKV recording to an animated GIF.
+  # Built with only the codecs, formats, and filters actually needed to keep
+  # the binary small and the build fast.
+  # gst-libav (below) also links against these shared libraries.
+  #
+  # To obtain the sha256:
+  #   wget https://ffmpeg.org/releases/ffmpeg-7.1.tar.xz
+  #   sha256sum ffmpeg-7.1.tar.xz
+  - name: ffmpeg
+    buildsystem: autotools
+    config-opts:
+      - --prefix=/app
+      - --disable-everything
+      - --disable-autodetect
+      - --enable-gpl
+      - --enable-version3
+      # Core libraries
+      - --enable-avcodec
+      - --enable-avformat
+      - --enable-avfilter
+      - --enable-swscale
+      - --enable-swresample
+      # Decoder: FFV1 lossless (the intermediate capture format)
+      - --enable-decoder=ffv1,rawvideo
+      # Demuxer: Matroska/MKV (the intermediate container)
+      - --enable-demuxer=matroska
+      # Encoder + muxer: animated GIF output
+      - --enable-encoder=gif
+      - --enable-muxer=gif
+      # Null muxer: used by the cropdetect analysis pass (-f null -)
+      - --enable-muxer=null
+      - --enable-protocol=file,pipe
+      # Filters used in the GIF conversion pipeline:
+      #   trim, setpts  — skip startup frames
+      #   cropdetect    — detect black borders around window captures
+      #   crop          — apply the detected or user-selected region
+      #   fps           — target frame rate
+      #   split         — fan-out for two-pass palette generation
+      #   palettegen    — build per-animation colour palette
+      #   paletteuse    — apply palette with Floyd-Steinberg dithering
+      #   scale, format — utility filters
+      #   null          — no-op sink for analysis-only passes
+      - --enable-filter=crop,cropdetect,trim,setpts,fps,palettegen,paletteuse,split,scale,format,null
+      # Programs: only the ffmpeg CLI is needed
+      - --enable-ffmpeg
+      - --disable-ffplay
+      - --disable-ffprobe
+    sources:
+      - type: archive
+        url: https://ffmpeg.org/releases/ffmpeg-7.1.tar.xz
+        sha256: 3990796ef85ef7e8490643064673931997d8ff72f311f459f3e16d0be8850948 # see comment above
+
+  # ── gst-libav ─────────────────────────────────────────────────────────────
+  # Provides the avenc_ffv1 GStreamer element (FFV1 lossless encoder) used
+  # by the recording pipeline.
+  #
+  # NOTE: Check whether the GNOME 49 SDK already bundles gst-libav:
+  #   flatpak info --show-extensions org.gnome.Sdk//49 | grep libav
+  # If it does, delete this entire module block.
+  #
+  # The version MUST match the GStreamer version bundled in the SDK.
+  # Check with: flatpak run --command=gst-inspect-1.0 org.gnome.Sdk//49 --version
+  #
+  # To obtain the sha256:
+  #   wget https://gstreamer.freedesktop.org/src/gst-libav/gst-libav-1.26.0.tar.xz
+  #   sha256sum gst-libav-1.26.0.tar.xz
+  - name: gst-libav
+    buildsystem: meson
+    config-opts:
+      - --prefix=/app
+      - -Ddoc=disabled
+    sources:
+      - type: archive
+        url: https://gstreamer.freedesktop.org/src/gst-libav/gst-libav-1.26.0.tar.xz
+        sha256: 707a8b687ff5fddcee5b02415e2ec9b71b4ac44d0b7aec3b477364ceecbf1ecf # see comment above
+
+  # ── gif-that-for-you ──────────────────────────────────────────────────────
+  # The main application, built with Cargo in offline mode.
+  #
+  # Prerequisites before running flatpak-builder:
+  #   1. Ensure Cargo.lock is committed to the repository.
+  #   2. Generate the offline Cargo sources file:
+  #        pip install aiohttp toml
+  #        curl -Lo flatpak-cargo-generator.py \
+  #          https://raw.githubusercontent.com/flatpak/flatpak-builder-tools/master/cargo/flatpak-cargo-generator.py
+  #        python3 flatpak-cargo-generator.py Cargo.lock -o cargo-sources.json
+  #      Commit cargo-sources.json alongside this manifest.
+  - name: gif-that-for-you
+    buildsystem: simple
+    build-commands:
+      # Restore crates from the pre-generated offline source list
+      - cargo --offline fetch --manifest-path Cargo.toml
+      # Build both binaries in release mode, locked to Cargo.lock
+      - cargo --offline build --release --locked
+      # Install binaries
+      - install -Dm755 target/release/gif-that-for-you
+        /app/bin/gif-that-for-you
+      - install -Dm755 target/release/gif-that-for-you-mcp
+        /app/bin/gif-that-for-you-mcp
+      # Desktop entry
+      - install -Dm644 io.github.kmwallio.GifThatForYou.desktop
+        /app/share/applications/io.github.kmwallio.GifThatForYou.desktop
+      # AppStream metainfo
+      - install -Dm644 io.github.kmwallio.GifThatForYou.metainfo.xml
+        /app/share/metainfo/io.github.kmwallio.GifThatForYou.metainfo.xml
+      # App icon
+      - install -Dm644 data/icons/hicolor/scalable/apps/io.github.kmwallio.GifThatForYou.svg
+        /app/share/icons/hicolor/scalable/apps/io.github.kmwallio.GifThatForYou.svg
+    sources:
+      - type: dir
+        path: .
+      # Generated by flatpak-cargo-generator.py — see prerequisites above
+      - cargo-sources.json

@@ -1,0 +1,38 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="128" height="128" viewBox="0 0 128 128">
+  <defs>
+    <linearGradient id="heartGrad" x1="0" y1="20" x2="0" y2="110" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#ff7f9e"/>
+      <stop offset="1" stop-color="#d63b60"/>
+    </linearGradient>
+    <linearGradient id="filmGrad" x1="20" y1="52" x2="108" y2="76" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#3a4050"/>
+      <stop offset="1" stop-color="#222733"/>
+    </linearGradient>
+    <linearGradient id="shirtGrad" x1="0" y1="72" x2="0" y2="114" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#6cc6f3"/>
+      <stop offset="1" stop-color="#3186d9"/>
+    </linearGradient>
+  </defs>
+
+  <path d="M64 112C41 95 24 79 24 59C24 46 34 36 47 36C54 36 60 39 64 45C68 39 74 36 81 36C94 36 104 46 104 59C104 79 87 95 64 112Z" fill="url(#heartGrad)"/>
+  <path d="M64 105C44 90 30 76 30 59C30 49 38 42 47 42C54 42 60 46 64 52C68 46 74 42 81 42C90 42 98 49 98 59C98 76 84 90 64 105Z" fill="#ffb1c3" opacity="0.16"/>
+
+  <rect x="18" y="50" width="92" height="28" rx="10" fill="url(#filmGrad)"/>
+  <rect x="18" y="50" width="92" height="28" rx="10" fill="none" stroke="#1a1f2b" stroke-width="2"/>
+  <g fill="#11141c" opacity="0.8">
+    <rect x="23" y="55" width="6" height="6" rx="1.5"/>
+    <rect x="23" y="67" width="6" height="6" rx="1.5"/>
+    <rect x="99" y="55" width="6" height="6" rx="1.5"/>
+    <rect x="99" y="67" width="6" height="6" rx="1.5"/>
+  </g>
+  <rect x="36" y="56" width="56" height="16" rx="4" fill="#5b6070" opacity="0.6"/>
+
+  <circle cx="64" cy="50" r="14" fill="#f2c19f"/>
+  <path d="M50 50C50 42 56 36 64 36C72 36 78 42 78 50C78 42 71 36 64 36C57 36 50 42 50 50Z" fill="#3e2f2b"/>
+  <path d="M62 52H66C66 55 68 57 71 57V60C67 60 64 58 62 55C60 58 57 60 53 60V57C56 57 58 55 58 52H62Z" fill="#cc8b63"/>
+
+  <path d="M38 112C38 94 50 82 64 82C78 82 90 94 90 112Z" fill="url(#shirtGrad)"/>
+  <path d="M48 89L64 100L80 89C78 85 72 82 64 82C56 82 50 85 48 89Z" fill="#ffffff" opacity="0.86"/>
+  <path d="M64 100L58 112H70Z" fill="#2465b6" opacity="0.7"/>
+</svg>
