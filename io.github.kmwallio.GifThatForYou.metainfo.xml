@@ -1,0 +1,52 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<component type="desktop-application">
+  <id>io.github.kmwallio.GifThatForYou</id>
+  <metadata_license>CC0-1.0</metadata_license>
+  <project_license>GPL-3.0-or-later</project_license>
+
+  <name>GifThatForYou</name>
+  <summary>Record your screen as an animated GIF</summary>
+
+  <description>
+    <p>
+      GifThatForYou is a GTK4 screen recording utility that saves recordings
+      directly as high-quality animated GIFs. It works on any Wayland compositor
+      via the XDG Desktop Portal ScreenCast API.
+    </p>
+    <ul>
+      <li>Record the entire screen, a specific window, or a selected region</li>
+      <li>Adjustable frame rate: 5, 10, 15, 20, 24, or 30 fps</li>
+      <li>Automatic black-border removal for window recordings</li>
+      <li>Floyd-Steinberg dithering for high-quality GIF output</li>
+      <li>Stop recording with a floating indicator or Ctrl+Shift+R</li>
+    </ul>
+  </description>
+
+  <url type="homepage">https://github.com/kmwallio/GifThatForYou</url>
+  <url type="bugtracker">https://github.com/kmwallio/GifThatForYou/issues</url>
+
+  <launchable type="desktop-id">io.github.kmwallio.GifThatForYou.desktop</launchable>
+
+  <screenshots>
+    <!-- Add screenshots here -->
+  </screenshots>
+
+  <releases>
+    <release version="0.1.0" date="2025-01-01">
+      <description>
+        <p>Initial release.</p>
+      </description>
+    </release>
+  </releases>
+
+  <content_rating type="oars-1.1"/>
+
+  <requires>
+    <display_length compare="ge">360</display_length>
+  </requires>
+
+  <recommends>
+    <control>pointing</control>
+    <control>keyboard</control>
+  </recommends>
+</component>

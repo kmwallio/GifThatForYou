@@ -64,6 +64,8 @@ On Ubuntu/Debian: `sudo apt install build-essential pkg-config`
 
 ## Building
 
+### From source (native)
+
 ```bash
 cargo build --release
 ```
@@ -74,6 +76,76 @@ This produces two binaries under `target/release/`:
 |--------|-------------|
 | `gif-that-for-you` | Main GTK4 application |
 | `gif-that-for-you-mcp` | MCP server for AI agent integration |
+
+### Flatpak
+
+The manifest `io.github.kmwallio.GifThatForYou.yml` targets the **GNOME 49 SDK**.
+
+#### Prerequisites
+
+Install `flatpak-builder` and the required runtimes:
+
+```bash
+# Install flatpak-builder (Arch)
+sudo pacman -S flatpak-builder
+
+# Install flatpak-builder (Ubuntu/Debian)
+sudo apt install flatpak-builder
+
+# Add Flathub and install the GNOME 49 SDK
+flatpak remote-add --if-not-exists flathub https://flathub.org/repo/flathub.flatpakrepo
+flatpak install flathub org.gnome.Platform//49 org.gnome.Sdk//49
+flatpak install flathub org.freedesktop.Sdk.Extension.rust-stable//24.08
+```
+
+#### 1. Fill in checksums
+
+Download the source archives and compute their `sha256` values, then replace the `FILL_IN` placeholders in the manifest:
+
+```bash
+wget https://ffmpeg.org/releases/ffmpeg-7.1.tar.xz
+sha256sum ffmpeg-7.1.tar.xz
+
+wget https://gstreamer.freedesktop.org/src/gst-libav/gst-libav-1.26.0.tar.xz
+sha256sum gst-libav-1.26.0.tar.xz
+```
+
+> **Note:** If the GNOME 49 SDK already bundles `gst-libav`, you can remove that entire module block from the manifest. Check with:
+> ```bash
+> flatpak info --show-extensions org.gnome.Sdk//49 | grep -i libav
+> ```
+
+#### 2. Generate offline Cargo sources
+
+Flatpak builds run without internet access, so all crate dependencies must be pre-fetched:
+
+```bash
+pip install aiohttp toml
+curl -LO https://raw.githubusercontent.com/flatpak/flatpak-builder-tools/master/cargo/flatpak-cargo-generator.py
+python3 flatpak-cargo-generator.py Cargo.lock -o cargo-sources.json
+```
+
+Commit `cargo-sources.json` alongside the manifest. It only needs to be regenerated when `Cargo.lock` changes.
+
+#### 3. Build and install
+
+```bash
+flatpak-builder --user --install --force-clean build-dir \
+    io.github.kmwallio.GifThatForYou.yml
+```
+
+Run the installed Flatpak:
+
+```bash
+flatpak run io.github.kmwallio.GifThatForYou
+```
+
+#### Build once without installing (for testing)
+
+```bash
+flatpak-builder --force-clean build-dir io.github.kmwallio.GifThatForYou.yml
+flatpak-builder --run build-dir io.github.kmwallio.GifThatForYou.yml gif-that-for-you
+```
 
 ## Usage
 
