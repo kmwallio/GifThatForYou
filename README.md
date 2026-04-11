@@ -82,6 +82,19 @@ This produces two binaries under `target/release/`:
 | `gif-that-for-you` | Main GTK4 application |
 | `gif-that-for-you-mcp` | MCP server for AI agent integration |
 
+#### Native install
+
+`install.sh` installs the binaries, `.desktop` entry, AppStream metainfo, and icon into a standard prefix. It builds the release binaries automatically if they're missing. By default it installs to `~/.local` (no sudo) or to `/usr/local` when run as root. Set `PREFIX` to override.
+
+```bash
+./install.sh                     # installs to ~/.local
+sudo ./install.sh                # installs to /usr/local
+PREFIX=/opt/gtfy ./install.sh    # installs to a custom prefix
+./install.sh uninstall           # removes everything installed above
+```
+
+If `~/.local/bin` is not on your `$PATH`, the script prints a one-line hint with the `export` command to add it.
+
 ### Flatpak
 
 The manifest `io.github.kmwallio.GifThatForYou.yml` targets the **GNOME 49 SDK**.
